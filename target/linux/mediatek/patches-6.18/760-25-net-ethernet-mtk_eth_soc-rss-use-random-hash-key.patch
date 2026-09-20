@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Lauri Nomme <lauri.nomme@gmail.com>
+Date: Wed, 16 Sep 2026 18:00:00 +0300
+Subject: [PATCH] net: ethernet: mtk_eth_soc: use per-boot random RSS hash key
+
+The multi-ring RSS port (760-22) used a hardcoded Toeplitz hash key. Upstream
+netdev RSS series (v8, "Add RSS support") replaces it with the kernel-standard
+per-boot randomised key via netdev_rss_key_fill(), and builds the indirection
+table with ethtool_rxfh_indir_default() instead of a hand-rolled i % rss_num.
+
+A fixed RSS key makes flow-to-ring placement predictable (static RSS hash
+bias and a minor hash-based side channel); the kernel-random key is the
+normal RSS behaviour on every other driver. Same ring count / indirection
+semantics, no hardware change.
+
+Signed-off-by: Lauri Nomme <lauri.nomme@gmail.com>
+---
+ drivers/net/ethernet/mediatek/mtk_eth_soc.c | 12 ++++--------
+ 1 file changed, 4 insertions(+), 8 deletions(-)
+
+--- a/drivers/net/ethernet/mediatek/mtk_eth_soc.c
++++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.c
+@@ -3449,19 +3449,13 @@ static int mtk_rss_init(struct mtk_eth *
+ {
+ 	const struct mtk_reg_map *reg_map = eth->soc->reg_map;
+ 	struct mtk_rss_params *rss_params = &eth->rss_params;
+-	static u8 hash_key[MTK_RSS_HASH_KEYSIZE] = {
+-		0xfa, 0x01, 0xac, 0xbe, 0x3b, 0xb7, 0x42, 0x6a,
+-		0x0c, 0xf2, 0x30, 0x80, 0xa3, 0x2d, 0xcb, 0x77,
+-		0xb4, 0x30, 0x7b, 0xae, 0xcb, 0x2b, 0xca, 0xd0,
+-		0xb0, 0x8f, 0xa3, 0x43, 0x3d, 0x25, 0x67, 0x41,
+-		0xc2, 0x0e, 0x5b, 0x25, 0xda, 0x56, 0x5a, 0x6d};
+ 	u32 val;
+ 	int i;
+ 
+-	memcpy(rss_params->hash_key, hash_key, MTK_RSS_HASH_KEYSIZE);
++	netdev_rss_key_fill(rss_params->hash_key, MTK_RSS_HASH_KEYSIZE);
+ 
+ 	for (i = 0; i < MTK_RSS_MAX_INDIRECTION_TABLE; i++)
+-		rss_params->indirection_table[i] = i % eth->soc->rss_num;
++		rss_params->indirection_table[i] = ethtool_rxfh_indir_default(i, eth->soc->rss_num);
+ 
+ 	if (!mtk_is_netsys_v3_or_greater(eth)) {
+ 		/* Set RSS rings to PSE modes */

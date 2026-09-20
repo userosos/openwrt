@@ -1,0 +1,49 @@
+From: Lauri Nomme <lauri.nomme@gmail.com>
+Date: Sat, 12 Sep 2026 22:30:00 +0300
+Subject: [PATCH] net: ethernet: mtk_eth_soc: restrict RSS/multi-ring to MT7988
+
+The RSS series grants MTK_PDMA_INT to MT7981/MT7986, redirecting their RX
+IRQ handling to the per-ring pdma0..pdma3 interrupts. MT7981 has no pdma
+IRQs in its dts (only fe0..fe3), so that would fail probe on MT7981 boards
+(mt3000/2500/etc). MT7986's dts does carry pdma0..pdma3, but without
+MTK_RSS (rings not allocated, hash never programmed) it gains nothing.
+
+Restrict multi-ring NAPI + RSS strictly to MT7988, which alone carries
+MTK_RSS and has the per-ring PDMA interrupts. All other filogic SoCs keep
+the exact upstream single-NAPI/irq path.
+
+Signed-off-by: Lauri Nomme <lauri.nomme@gmail.com>
+--- a/drivers/net/ethernet/mediatek/mtk_eth_soc.c
++++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.c
+@@ -6368,7 +6368,6 @@ static const struct mtk_soc_data mt7629_
+ static const struct mtk_soc_data mt7981_data = {
+ 	.reg_map = &mt7986_reg_map,
+ 	.ana_rgc3 = 0x128,
+-	.rss_num = 4,
+ 	.caps = MT7981_CAPS,
+ 	.hw_features = MTK_HW_FEATURES,
+ 	.required_clks = MT7981_CLKS_BITMAP,
+@@ -6399,7 +6398,6 @@ static const struct mtk_soc_data mt7981_
+ static const struct mtk_soc_data mt7986_data = {
+ 	.reg_map = &mt7986_reg_map,
+ 	.ana_rgc3 = 0x128,
+-	.rss_num = 4,
+ 	.caps = MT7986_CAPS,
+ 	.hw_features = MTK_HW_FEATURES,
+ 	.required_clks = MT7986_CLKS_BITMAP,
+--- a/drivers/net/ethernet/mediatek/mtk_eth_soc.h
++++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.h
+@@ -1250,11 +1250,11 @@ enum mkt_eth_capabilities {
+ #define MT7981_CAPS  (MTK_GMAC1_SGMII | MTK_GMAC2_SGMII | MTK_GMAC2_GEPHY | \
+ 		      MTK_MUX_GMAC12_TO_GEPHY_SGMII | MTK_QDMA | \
+ 		      MTK_MUX_U3_GMAC23_TO_QPHY | MTK_U3_COPHY_V2 | \
+-		      MTK_RSTCTRL_PPE1 | MTK_SRAM | MTK_PDMA_INT)
++		      MTK_RSTCTRL_PPE1 | MTK_SRAM)
+ 
+ #define MT7986_CAPS  (MTK_GMAC1_SGMII | MTK_GMAC2_SGMII | \
+ 		      MTK_MUX_GMAC12_TO_GEPHY_SGMII | MTK_QDMA | \
+-		      MTK_RSTCTRL_PPE1 | MTK_SRAM | MTK_PDMA_INT)
++		      MTK_RSTCTRL_PPE1 | MTK_SRAM)
+ 
+ #define MT7987_CAPS  (MTK_36BIT_DMA | MTK_GMAC1_SGMII | \
+ 		      MTK_GMAC2_2P5GPHY_V2 | MTK_GMAC2_SGMII | MTK_GMAC3_SGMII | \

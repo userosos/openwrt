@@ -1,0 +1,81 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Lauri Nomme <lauri.nomme@gmail.com>
+Date: Sat, 19 Sep 2026 12:30:00 +0300
+Subject: [PATCH] net: ethernet: mtk_eth_soc: program PDMA SDL max RX frame + disable page_pool for jumbo
+
+9K jumbo frames were being silently dropped / crashing the RX path:
+
+1) PDMA SDL (max RX frame) register was never programmed, so the DMA
+   engine refused frames > ~1518 regardless of netdev MTU. Program
+   reg_map->pdma.rx_cfg with (MTK_PDMA_LRO_SDL + rx_buf_len) in the SDL
+   field on netsys_v3+, both at hwlro init and in mtk_change_mtu (so a
+   runtime MTU change re-applies it).
+
+2) The page_pool RX path uses order-0 single PAGE_SIZE buffers: a jumbo
+   frame cannot fit and skb_put() panics (skb_over_panic). Disable
+   page_pool/XDP whenever any netdev runs an MTU > MTK_PP_MAX_BUF_SIZE;
+   the RX path then uses the 9K-capable mtk_max_buf_alloc() frag buffers
+   sized from ring->frag_size.
+
+Fixes skb_over_panic (len:~9K, end:0xec0) in mtk_poll_rx for 9K traffic.
+
+Signed-off-by: Lauri Nomme <lauri.nomme@gmail.com>
+---
+--- a/drivers/net/ethernet/mediatek/mtk_eth_soc.c
++++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.c
+@@ -2109,6 +2109,19 @@ static void mtk_update_rx_cpu_idx(struct
+ 
+ static bool mtk_page_pool_enabled(struct mtk_eth *eth)
+ {
++	int i;
++
++	/* Jumbo frames (> page-pool single-page capacity) cannot fit into
++	 * the order-0 page_pool RX buffers; the RX path then uses the
++	 * mtk_max_buf_alloc() frag path sized from ring->frag_size instead.
++	 * Disable page_pool/XDP whenever any netdev runs a jumbo MTU so
++	 * large frames are handled through 9K-capable frag buffers instead
++	 * of panicking in skb_over_panic.
++	 */
++	for (i = 0; i < MTK_MAX_DEVS; i++)
++		if (eth->netdev[i] && eth->netdev[i]->mtu > MTK_PP_MAX_BUF_SIZE)
++			return false;
++
+ 	return mtk_is_netsys_v2_or_greater(eth);
+ }
+ 
+@@ -3240,6 +3253,17 @@ static int mtk_hwlro_rx_init(struct mtk_
+ 	mtk_w32(eth, (MTK_HW_LRO_TIMER_UNIT << 16) | MTK_HW_LRO_REFRESH_TIME,
+ 		MTK_PDMA_LRO_ALT_REFRESH_TIMER);
+ 
++	/* program the max RX frame (SDPL) into the PDMA RX cfg so jumbo
++	 * frames up to rx_buf_len are accepted by the DMA engine; without
++	 * this the default SDL cap silently drops frames > ~1518
++	 */
++	if (mtk_is_netsys_v3_or_greater(eth)) {
++		u32 val = mtk_r32(eth, reg_map->pdma.rx_cfg);
++
++		mtk_w32(eth, val | ((MTK_PDMA_LRO_SDL + eth->rx_buf_len) <<
++			MTK_RX_CFG_SDL_OFFSET), reg_map->pdma.rx_cfg);
++	}
++
+ 	/* set HW LRO mode & the max aggregation count for rx packets */
+ 	lro_ctrl_dw3 |= MTK_ADMA_MODE | (MTK_HW_LRO_MAX_AGG_CNT & 0xff);
+ 
+@@ -4933,6 +4957,17 @@ static int mtk_change_mtu(struct net_dev
+ 	else
+ 		return -EINVAL;
+ 
++	/* reprogram the PDMA max RX frame (SDPL); without this the DMA
++	 * silently drops jumbo frames even though the netdev MTU changed
++	 */
++	if (mtk_is_netsys_v3_or_greater(eth)) {
++		u32 val = mtk_r32(eth, eth->soc->reg_map->pdma.rx_cfg);
++
++		mtk_w32(eth, val | ((MTK_PDMA_LRO_SDL + eth->rx_buf_len) <<
++			MTK_RX_CFG_SDL_OFFSET),
++			eth->soc->reg_map->pdma.rx_cfg);
++	}
++
+ 	return 0;
+ }
+ 

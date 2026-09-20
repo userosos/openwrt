@@ -1,0 +1,100 @@
+From: Lauri Nomme <lauri.nomme@gmail.com>
+Date: Mon, 14 Sep 2026 01:55:00 +0300
+Subject: [PATCH] net: ethernet: mtk_eth_soc: expose RSS channels + flow-hash via ethtool
+
+Complete the RSS ethtool surface for MT7988 (multi-ring NAPI/RSS build):
+
+- mtk_get_rxnfc: answer ETHTOOL_GRXFH so `ethtool -n <if> rx-flow-hash
+  tcp4/udp4/...' reports Toeplitz hashing on the IP src/dst + L4 ports
+  for RSS-capable SoCs (was -EOPNOTSUPP).
+- add mtk_get_channels/mtk_set_channels: report MTK_RX_RSS_NUM combined
+  queues and accept that count, so `ethtool -L <if> combined 4' works.
+- mtk_get_rxfh: always report ETH_RSS_HASH_TOP (drop the hfunc guard,
+  which evaluated false on the ioctl GET path and left the function as
+  'unknown / Operation not supported').
+
+Non-RSS SoCs keep combined_count=1 and are unchanged.
+Signed-off-by: Lauri Nomme <lauri.nomme@gmail.com>
+---
+--- a/drivers/net/ethernet/mediatek/mtk_eth_soc.c
++++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.c
+@@ -5242,6 +5242,24 @@ static int mtk_get_rxnfc(struct net_devi
+ 			ret = 0;
+ 		}
+ 		break;
++	case ETHTOOL_GRXFH:
++		if (!MTK_HAS_CAPS(eth->soc->caps, MTK_RSS))
++			break;
++		switch (cmd->flow_type) {
++		case TCP_V4_FLOW:
++		case TCP_V6_FLOW:
++		case UDP_V4_FLOW:
++		case UDP_V6_FLOW:
++		case TCP_V4_FLOW | FLOW_EXT:
++		case TCP_V6_FLOW | FLOW_EXT:
++		case UDP_V4_FLOW | FLOW_EXT:
++		case UDP_V6_FLOW | FLOW_EXT:
++			cmd->data = RXH_IP_SRC | RXH_IP_DST |
++				    RXH_L4_B_0_1 | RXH_L4_B_2_3;
++			ret = 0;
++			break;
++		}
++		break;
+ 	case ETHTOOL_GRXCLSRLCNT:
+ 		if (dev->hw_features & NETIF_F_LRO) {
+ 			struct mtk_mac *mac = netdev_priv(dev);
+@@ -5331,8 +5349,7 @@ static int mtk_get_rxfh(struct net_devic
+ 	struct mtk_rss_params *rss_params = &eth->rss_params;
+ 	int i;
+ 
+-	if (rxfh->hfunc)
+-		rxfh->hfunc = ETH_RSS_HASH_TOP;	/* Toeplitz */
++	rxfh->hfunc = ETH_RSS_HASH_TOP;	/* Toeplitz */
+ 
+ 	if (rxfh->key) {
+ 		memcpy(rxfh->key, rss_params->hash_key,
+@@ -5430,6 +5447,35 @@ static netdev_features_t mtk_features_ch
+ }
+ #endif
+ 
++static void mtk_get_channels(struct net_device *dev, struct ethtool_channels *channel)
++{
++	struct mtk_mac *mac = netdev_priv(dev);
++	struct mtk_eth *eth = mac->hw;
++
++	if (!MTK_HAS_CAPS(eth->soc->caps, MTK_RSS)) {
++		channel->combined_count = 1;
++		channel->max_combined = 1;
++		return;
++	}
++
++	channel->combined_count = MTK_RX_RSS_NUM;
++	channel->max_combined = MTK_RX_RSS_NUM;
++}
++
++static int mtk_set_channels(struct net_device *dev, struct ethtool_channels *channel)
++{
++	struct mtk_mac *mac = netdev_priv(dev);
++	struct mtk_eth *eth = mac->hw;
++
++	if (!MTK_HAS_CAPS(eth->soc->caps, MTK_RSS))
++		return channel->combined_count == 0 || channel->combined_count == 1 ? 0 : -EINVAL;
++
++	if (channel->combined_count != 0 && channel->combined_count != MTK_RX_RSS_NUM)
++		return -EINVAL;
++
++	return 0;
++}
++
+ static const struct ethtool_ops mtk_ethtool_ops = {
+ 	.get_link_ksettings	= mtk_get_link_ksettings,
+ 	.set_link_ksettings	= mtk_set_link_ksettings,
+@@ -5438,6 +5484,8 @@ static const struct ethtool_ops mtk_etht
+ 	.set_msglevel		= mtk_set_msglevel,
+ 	.nway_reset		= mtk_nway_reset,
+ 	.get_link		= ethtool_op_get_link,
++	.get_channels		= mtk_get_channels,
++	.set_channels		= mtk_set_channels,
+ 	.get_strings		= mtk_get_strings,
+ 	.get_sset_count		= mtk_get_sset_count,
+ 	.get_ethtool_stats	= mtk_get_ethtool_stats,

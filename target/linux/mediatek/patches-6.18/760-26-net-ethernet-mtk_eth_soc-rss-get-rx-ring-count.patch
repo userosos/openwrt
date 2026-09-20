@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Lauri Nomme <lauri.nomme@gmail.com>
+Date: Wed, 16 Sep 2026 18:05:00 +0300
+Subject: [PATCH] net: ethernet: mtk_eth_soc: report RSS RX ring count via .get_rx_ring_count
+
+Add the modern ethtool_ops .get_rx_ring_count() so ethtool queries the ring
+count through the dedicated op (upstream moved ETHTOOL_GRXRINGS handling to
+it, e.g. commit e33bd8dd7f1f). Returns MTK_MAX_RX_RING_NUM when HW-LRO is
+active, MTK_RX_RSS_NUM when RSS is enabled, else 0 — wiring the RSS ring
+count into the kernel's standard ring-count path alongside the existing
+ETHTOOL_GRXRINGS branch in mtk_get_rxnfc.
+
+Signed-off-by: Lauri Nomme <lauri.nomme@gmail.com>
+---
+ drivers/net/ethernet/mediatek/mtk_eth_soc.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+--- a/drivers/net/ethernet/mediatek/mtk_eth_soc.c
++++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.c
+@@ -5219,6 +5219,19 @@ static void mtk_get_ethtool_stats(struct
+ 	} while (u64_stats_fetch_retry(&hwstats->syncp, start));
+ }
+ 
++static u32 mtk_get_rx_ring_count(struct net_device *dev)
++{
++	struct mtk_mac *mac = netdev_priv(dev);
++	struct mtk_eth *eth = mac->hw;
++
++	if (dev->hw_features & NETIF_F_LRO)
++		return MTK_MAX_RX_RING_NUM;
++	else if (MTK_HAS_CAPS(eth->soc->caps, MTK_RSS))
++		return MTK_RX_RSS_NUM;
++
++	return 0;
++}
++
+ static int mtk_get_rxnfc(struct net_device *dev, struct ethtool_rxnfc *cmd,
+ 			 u32 *rule_locs)
+ {
+@@ -5480,6 +5493,7 @@ static const struct ethtool_ops mtk_etht
+ 	.get_link		= ethtool_op_get_link,
+ 	.get_channels		= mtk_get_channels,
+ 	.set_channels		= mtk_set_channels,
++	.get_rx_ring_count	= mtk_get_rx_ring_count,
+ 	.get_strings		= mtk_get_strings,
+ 	.get_sset_count		= mtk_get_sset_count,
+ 	.get_ethtool_stats	= mtk_get_ethtool_stats,
