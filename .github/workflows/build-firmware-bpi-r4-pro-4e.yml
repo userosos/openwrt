@@ -19,6 +19,10 @@ jobs:
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+      - name: Add Custom Packages (AmneziaWG)
+        run: |
+          # clone awg3.1
+          git clone https://github.com/2Grey/awg-openwrt package/awg-openwrt
 
       - name: Apply Custom Configuration
         run: |
